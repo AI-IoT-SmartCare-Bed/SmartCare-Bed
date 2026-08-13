@@ -1,0 +1,30 @@
+# ==============================================================================
+# 스마트 케어 침대 data-server 파이썬 의존성
+# ==============================================================================
+# 대상 코드: ../data-server/{subscriber,fake_publisher,preprocess}.py
+
+# paho-mqtt 는 1.6.x 로 고정한다.
+# 이유: subscriber.py / fake_publisher.py 가 `mqtt.Client()` 를 인자 없이 호출하고
+# on_connect(client, userdata, flags, rc) 형태의 구(舊) v1 콜백 시그니처를 쓴다.
+# paho-mqtt 2.x 부터는 CallbackAPIVersion 을 명시하지 않으면 생성자에서
+# ValueError 가 발생해 코드가 그대로 깨진다(콜백 시그니처도 v2에서 바뀜:
+# on_connect(client, userdata, flags, reason_code, properties)).
+# 코드를 수정하지 않는 것이 이 배포의 전제이므로 라이브러리를 1.6.x 에 고정한다.
+paho-mqtt>=1.6,<2
+
+# psycopg2-binary: subscriber.py / preprocess.py 의 DB 접속에 사용.
+# 소스 빌드(psycopg2) 대신 바이너리 배포판을 써서 컨테이너/서버에 postgres
+# 개발 헤더·컴파일러 설치 없이 바로 pip install 되게 함(1GB RAM 서버에서
+# 컴파일 자체도 부담이 됨).
+psycopg2-binary>=2.9,<3
+
+pandas>=2.0,<3
+
+# (선택) SQLAlchemy: preprocess.py 는 pandas.read_sql 에 psycopg2 raw connection
+# 을 그대로 넘긴다. 동작은 하지만 pandas 가
+#   "UserWarning: pandas only supports SQLAlchemy connectable ..."
+# 경고를 낸다. 경고만 없앨 목적이면 SQLAlchemy 를 설치하고 preprocess.py 쪽에서
+# create_engine() 으로 바꿔야 하는데, 이는 코드 수정이 필요하므로 이번 배포
+# 범위 밖이다. 코드를 손대지 않는 한 이 패키지를 설치해도 경고는 사라지지
+# 않는다 — 참고용으로만 남겨둔다.
+# sqlalchemy>=2.0,<3

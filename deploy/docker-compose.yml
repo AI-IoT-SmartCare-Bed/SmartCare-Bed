@@ -1,0 +1,72 @@
+# ==============================================================================
+# 스마트 케어 침대 데이터서버 — docker-compose
+# ==============================================================================
+# 대상 코드(수정 금지): ../data-server/{subscriber,fake_publisher,preprocess}.py
+# 위 코드에 이미 고정된 접속정보를 그대로 맞춤:
+#   - DB   : host=localhost port=5432 dbname=smartcare user=postgres password=smartcare123
+#   - MQTT : broker=localhost port=1883 topic=bed/bed-01/sensor
+#
+# ⚠️ 보안 경고 (데모 전용 구성):
+#   - POSTGRES_PASSWORD 가 매우 약하고(smartcare123) 이 파일에 평문 하드코딩됨.
+#     운영 환경이라면 .env + docker secrets 또는 별도 시크릿 매니저로 분리할 것.
+#   - mosquitto 는 allow_anonymous true (인증 없음).
+#   - 5432(DB), 1883(MQTT) 포트를 공인 IP에 그대로 열어두면 인터넷에서 바로
+#     접속 가능해진다. AWS/Lightsail 등에 배포 시 반드시 방화벽/보안그룹으로
+#     해당 포트를 신뢰 IP 대역으로 제한하거나, 아래처럼 "127.0.0.1:5432:5432"
+#     형태로 로컬호스트에만 바인딩할 것 (이 파일은 data-server 스크립트가
+#     같은 호스트에서 localhost 로 접속하는 걸 전제로 하므로 로컬 바인딩이
+#     오히려 기본 목적에 더 맞다 — 필요시 아래 ports 를 "127.0.0.1:5432:5432" /
+#     "127.0.0.1:1883:1883" 로 바꿀 것).
+# ==============================================================================
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: smartcare-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: smartcare
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: smartcare123   # 데모용 하드코딩 — 운영 시 교체 필수
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # ── 1GB RAM 인스턴스(예: Lightsail 소형) 대비 튜닝 ──────────────────────
+    # 기본값은 수 GB RAM 기준이라 그대로 두면 OOM 위험이 큼.
+    # shared_buffers/effective_cache_size 를 낮추고 max_connections 도 제한.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=128MB"
+      - "-c"
+      - "effective_cache_size=256MB"
+      - "-c"
+      - "max_connections=20"
+      - "-c"
+      - "work_mem=4MB"
+      - "-c"
+      - "maintenance_work_mem=32MB"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d smartcare"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: smartcare-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+volumes:
+  pgdata:
+  mosquitto_data:
+  mosquitto_log:
