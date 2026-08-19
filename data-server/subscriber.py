@@ -42,12 +42,16 @@ cur = conn.cursor()
 
 # ── 박다솔 필드명 → 우리 sensor_code 매핑 ───────────────────
 # 박다솔이 보내는 키(왼쪽)를 우리 테이블 sensor_code(오른쪽)로 변환.
+# fsr 은 4모서리 배열이라 별도 처리(FSR0~FSR3). 아래는 스칼라 필드만.
 SENSOR_MAP = {
-    "fsr":         "FSR",     # 압력
-    "dist_cm":     "DIST",    # 거리
-    "sw420":       "SW420",   # 진동
-    "breath_rate": "BREATH",  # 호흡
-    "heart_rate":  "HEART",   # 심박
+    "dist_cm":     "DIST",     # 거리
+    "sw420":       "SW420",    # 진동
+    "breath_rate": "BREATH",   # 호흡
+    "heart_rate":  "HEART",    # 심박
+    "pir":         "PIR",      # 재실(PIR)
+    "accel_x":     "ACCEL_X",  # IMU 가속도 X
+    "accel_y":     "ACCEL_Y",  # IMU 가속도 Y
+    "accel_z":     "ACCEL_Z",  # IMU 가속도 Z
 }
 
 
@@ -58,26 +62,52 @@ def on_connect(client, userdata, flags, rc):
 
 
 # ── 콜백 2: 메시지 도착 시 ───────────────────────────────────
+# 한 메시지가 잘못돼도 구독자 전체가 죽지 않도록 전부 try/except 로 감싼다.
+# (예전엔 방어가 없어서 값 하나 이상하면 프로세스가 크래시-재시작 루프에 빠졌음)
 def on_message(client, userdata, msg):
-    data = json.loads(msg.payload.decode())
-    print("받음:", data)
+    try:
+        data = json.loads(msg.payload.decode())
+    except Exception as e:
+        print("JSON 파싱 실패, 건너뜀:", e)
+        return
 
-    # 수신 시각을 서버에서 생성 (ESP32는 RTC가 없어 정확한 시각을 모름 → 서버 시각이 더 정확)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)   # 서버 수신 시각(ESP32는 RTC 없음)
     bed_id = data.get("bed_id", "unknown")
 
-    # 넓은 JSON을 센서별로 쪼개서 각각 한 줄씩 저장
-    saved = 0
+    # (sensor_code, value) 목록을 만든 뒤 한 줄씩 저장한다.
+    rows = []
+
+    # fsr 은 4모서리 배열([887,895,879,883]) → 모서리별로 FSR0~FSR3 개별 저장.
+    # 무게중심(CoP) 계산에 4점이 다 필요하므로 합치지 않고 개별 보관.
+    fsr = data.get("fsr")
+    if isinstance(fsr, (list, tuple)):
+        for i, v in enumerate(fsr):
+            rows.append((f"FSR{i}", v))
+    elif fsr is not None:                # 혹시 스칼라로 오면 FSR0 로 저장
+        rows.append(("FSR0", fsr))
+
+    # 나머지 스칼라 필드
     for field, code in SENSOR_MAP.items():
-        if field not in data:      # 이번 메시지에 그 센서가 없으면 건너뜀(KeyError 방지)
+        if field in data and data[field] is not None:
+            rows.append((code, data[field]))
+
+    saved = 0
+    for code, value in rows:
+        try:
+            fval = float(value)          # double precision 컬럼에 안전 캐스팅
+        except (TypeError, ValueError):
+            print(f"  ! {code} 값 무시(숫자 아님): {value!r}")
             continue
-        cur.execute(
-            "INSERT INTO sensor_reading (time, bed_id, sensor_code, value, quality) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (now, bed_id, code, data[field], 100)   # quality 는 일단 100 고정
-        )
-        saved += 1
-    print(f"  → {saved}개 센서값 저장")
+        try:
+            cur.execute(
+                "INSERT INTO sensor_reading (time, bed_id, sensor_code, value, quality) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (now, bed_id, code, fval, 100)
+            )
+            saved += 1
+        except Exception as e:
+            print(f"  ! INSERT 실패 {code}={fval}: {e}")
+    print(f"받음 {bed_id}: {saved}개 저장")
 
 
 # ── 클라이언트 생성 & 콜백 등록 ──────────────────────────────
