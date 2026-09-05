@@ -29,19 +29,95 @@ unsigned long servo4LastMove = 0;
 unsigned long servo3WaitStart = 0;
 unsigned long servo4WaitStart = 0;
 
+
+// ===============================
+// 비상정지 버튼 설정
+// ===============================
+#define EMERGENCY_BUTTON_PIN 18 // D9
+
+bool emergencyStopState = false;
+
+// 버튼 디바운싱
+bool lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
+
 // ===============================
 // Wi-Fi & MQTT 설정
 // ===============================
 const char* ssid = "TOZGHM";
 const char* password = "123456789@";
 
-const char* mqtt_server = "3.34.139.68";
+const char* mqtt_server = "192.168.25.96";
 const int mqtt_port = 1883;
 
 const char* control_topic = "bed/bed-01/control";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+
+// ===============================
+// 비상정지 실행
+// ===============================
+void emergencyStop() {
+
+  // 이미 비상정지 상태라면 다시 실행하지 않음
+  if (emergencyStopState) {
+    return;
+  }
+
+  emergencyStopState = true;
+
+  Serial.println("================================");
+  Serial.println("!!! 비상정지 작동 !!!");
+  Serial.println("Servo 3, Servo 4 원위치 복귀");
+  Serial.println("================================");
+
+  // Servo 3 원위치
+  servoAngle3 = 0;
+  servo3.write(servoAngle3);
+
+  // Servo 4 원위치
+  servoAngle4 = 90;
+  servo4.write(servoAngle4);
+
+  // 서보 동작 중지
+  servo3Active = false;
+  servo4Active = false;
+
+  // 대기 상태 초기화
+  servo3Waiting = false;
+  servo4Waiting = false;
+}
+
+
+// ===============================
+// 비상정지 버튼 확인
+// ===============================
+void checkEmergencyButton() {
+
+  bool reading = digitalRead(EMERGENCY_BUTTON_PIN);
+
+  // 버튼 상태가 변했으면 디바운싱 시작
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  // 일정 시간 동안 상태가 유지되었는지 확인
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+
+    // INPUT_PULLUP이므로 LOW = 버튼 눌림
+    if (reading == LOW) {
+
+      emergencyStop();
+    }
+  }
+
+  lastButtonState = reading;
+}
+
 
 // ===============================
 // MQTT 수신 콜백
@@ -59,34 +135,56 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("[MQTT 수신] ");
   Serial.println(message);
 
+
   // ==========================
   // Servo 3 시작
   // ==========================
-  if (message == "3") {
+  if (message == "3" || message == "5") {
 
-    servo3Active = true;
-    servo3Waiting = false;
+    // 비상정지 상태에서는 동작 차단
+    if (emergencyStopState) {
 
-    servoAngle3 = 0;
-    servo3.write(servoAngle3);
+      Serial.println(">>> 비상정지 상태 - Servo 3 동작 차단");
+
+    } else {
+
+      servo3Active = true;
+      servo3Waiting = false;
+
+      servoAngle3 = 0;
+      servo3.write(servoAngle3);
+    }
   }
+
 
   // ==========================
   // Servo 4 시작
   // ==========================
   else if (message == "4") {
 
-    servo4Active = true;
-    servo4Waiting = false;
+    // 비상정지 상태에서는 동작 차단
+    if (emergencyStopState) {
 
-    servoAngle4 = 90;
-    servo4.write(servoAngle4);
+      Serial.println(">>> 비상정지 상태 - Servo 4 동작 차단");
+
+    } else {
+
+      servo4Active = true;
+      servo4Waiting = false;
+
+      servoAngle4 = 90;
+      servo4.write(servoAngle4);
+    }
   }
+
 
   // ==========================
   // 정상 상태 복귀
   // ==========================
   else if (message == "0") {
+
+    // 비상정지 해제
+    emergencyStopState = false;
 
     // 즉시 원위치 복귀
     servoAngle3 = 0;
@@ -104,6 +202,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println(">>> 정상 상태 복귀");
   }
 }
+
 
 // ===============================
 // WiFi 연결
@@ -123,6 +222,7 @@ void setupWiFi() {
   Serial.println("WiFi 연결 완료");
   Serial.println(WiFi.localIP());
 }
+
 
 // ===============================
 // MQTT 재연결
@@ -152,12 +252,17 @@ void reconnectMQTT() {
   }
 }
 
+
 // ===============================
 // Setup
 // ===============================
 void setup() {
 
   Serial.begin(115200);
+
+  // 비상정지 버튼 설정
+  // D9(GPIO18)과 GND 사이에 tact button 연결
+  pinMode(EMERGENCY_BUTTON_PIN, INPUT_PULLUP);
 
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
@@ -176,20 +281,28 @@ void setup() {
   client.setCallback(callback);
 }
 
+
 // ===============================
 // Loop
 // ===============================
 void loop() {
 
+  // 비상정지 버튼을 가장 먼저 확인
+  checkEmergencyButton();
+
+
   if (WiFi.status() != WL_CONNECTED) {
     setupWiFi();
   }
+
 
   if (!client.connected()) {
     reconnectMQTT();
   }
 
+
   client.loop();
+
 
   // ==========================
   // Servo 3
@@ -226,6 +339,7 @@ void loop() {
       }
     }
   }
+
 
   // ==========================
   // Servo 4
