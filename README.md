@@ -1,6 +1,7 @@
 # AI·IoT 기반 고령자 낙상 예방 및 건강 모니터링 스마트 케어 침대 시스템
 
-> 2026년 한이음 드림업 공모전 · 프로젝트 번호 26_HC058
+> 2026년 한이음 드림업 공모전
+> 프로젝트 번호 26_HC058
 > 팀명 : 세이프 베드 (Safe Bed)
 > 저장소 : https://github.com/AI-IoT-SmartCare-Bed/SmartCare-Bed
 
